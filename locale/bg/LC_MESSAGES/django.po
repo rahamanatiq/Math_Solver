@@ -1,0 +1,115 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-03-13 20:04+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: bg\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: chatbot/views.py:98 chatbot/views.py:106 chatbot/views.py:117
+#: chatbot/views.py:137
+msgid "Session not found"
+msgstr "Сесията не е намерена"
+
+#: chatbot/views.py:122
+msgid "Title is required and cannot be empty."
+msgstr "Заглавието е задължително и не може да бъде празно."
+
+#: chatbot/views.py:144
+msgid "Message, image, or audio is required"
+msgstr "Съобщение, изображение или аудио са задължителни"
+
+#: chatbot/views.py:255
+msgid "Message, image, or audio is required."
+msgstr "Съобщение, изображение или аудио са задължителни."
+
+#: users/models.py:15
+msgid "The Email must be set"
+msgstr "Имейлът трябва да бъде зададен"
+
+#: users/models.py:17
+msgid "The Username must be set"
+msgstr "Потребителското име трябва да бъде зададено"
+
+#: users/models.py:33
+msgid "Superuser must have is_staff=True."
+msgstr "Суперпотребителят трябва да има is_staff=True."
+
+#: users/models.py:35
+msgid "Superuser must have is_superuser=True."
+msgstr "Суперпотребителят трябва да има is_superuser=True."
+
+#: users/models.py:41
+msgid "email address"
+msgstr "имейл адрес"
+
+#: users/views.py:41
+msgid "Registration successful. OTP sent to email."
+msgstr "Регистрацията е успешна. OTP кодът е изпратен на имейл."
+
+#: users/views.py:58
+msgid "Email verified successfully."
+msgstr "Имейлът е потвърден успешно."
+
+#: users/views.py:59 users/views.py:154
+msgid "OTP expired."
+msgstr "OTP кодът е изтекъл."
+
+#: users/views.py:60
+msgid "Invalid OTP."
+msgstr "Невалиден OTP код."
+
+#: users/views.py:62 users/views.py:135 users/views.py:156 users/views.py:181
+msgid "User not found."
+msgstr "Потребителят не е намерен."
+
+#: users/views.py:102
+msgid "Invalid credentials."
+msgstr "Невалидни идентификационни данни."
+
+#: users/views.py:133
+msgid "OTP sent to email."
+msgstr "OTP кодът е изпратен на имейл."
+
+#: users/views.py:153
+msgid "OTP verified. Proceed to reset password."
+msgstr "OTP кодът е потвърден. Продължете към нулиране на паролата."
+
+#: users/views.py:179
+msgid "Password reset successful."
+msgstr "Нулирането на паролата е успешно."
+
+#: users/views.py:197
+msgid "Email is required."
+msgstr "Имейлът е задължителен."
+
+#: users/views.py:212
+msgid "Email is already verified."
+msgstr "Имейлът вече е потвърден."
+
+#: users/views.py:236
+msgid "OTP resent successfully. Please check your email."
+msgstr "OTP кодът е изпратен повторно успешно. Моля, проверете имейла си."
+
+#: users/views.py:261
+msgid "Account deleted successfully."
+msgstr "Акаунтът е изтрит успешно."
+
+#: users/views.py:279
+msgid "Logout successful."
+msgstr "Излизането е успешно."
+
+#: users/views.py:281
+msgid "Invalid token."
+msgstr "Невалиден токен."
