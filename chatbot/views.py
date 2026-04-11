@@ -62,6 +62,41 @@ def draw_wolfram_alpha_shape(query: str) -> str:
         return "Error: Wolfram Alpha visual query timed out."
     except Exception as e:
         return f"Error: {str(e)}"
+def generate_practice_questions(topic: str, request_language: str = 'Bulgarian', num_questions: int = 5) -> str:
+    """Use this tool whenever the user demonstrates an intent to practice, be tested, receive sample problems, or generate exam-style questions. 
+    Triggers on both semantic intent (e.g., 'quiz me', 'give me some task') and explicit keywords (e.g., 'generate questions', 'practice', 'mock test', 'exam-style', 'тест', 'въпроси', 'задачи').
+    topic: The specific math topic or area to focus on.
+    request_language: User's language (default 'Bulgarian').
+    num_questions: Count of questions."""
+    from chatbot.rag.retriever import get_document_context
+    import google.generativeai as genai
+    import random
+    
+    # Fetch 10 chunks for better coverage
+    context = get_document_context(topic, k=10)
+    
+    if request_language.lower() in ['english', 'en', 'eng']:
+        try:
+            translator_model = genai.GenerativeModel('models/gemini-2.5-flash')
+            translation_prompt = f"Translate the following Bulgarian document text to clear English. Keep math and multiple-choice labels format:\n\n{context}"
+            tr_resp = translator_model.generate_content(translation_prompt)
+            if tr_resp.text:
+                context = tr_resp.text
+        except Exception:
+            pass
+    
+    seed = random.randint(1000, 999999)
+    return (
+        f"KNOWLEDGE BASE CONTEXT (STRICT BOUNDARY):\n{context}\n\n"
+        f"TASK: Generate EXACTLY {num_questions} practice questions about '{topic}'.\n\n"
+        f"STRICT INSTRUCTIONS:\n"
+        f"1. You are FORBIDDEN from using your own general mathematical knowledge to create these questions. You MUST only use the logic, difficulty level, and problem-solving patterns found in the KNOWLEDGE BASE CONTEXT above.\n"
+        f"2. Mimic the exact structural format (labels, spacing, LaTeX) of the context.\n"
+        f"3. Generate unique variants; do not repeat the same question twice.\n"
+        f"4. Output must be in {request_language}.\n"
+        f"5. NO 'Steps' or 'Final Answer' boxes. Just the questions.\n"
+        f"[Seed: {seed}]"
+    )
 
 # Configure Gemini
 genai.configure(api_key=settings.GEMINI_API_KEY)
@@ -75,25 +110,30 @@ def build_system_instruction(language=None):
     lang_instruction = (
         f"You MUST respond entirely in {language}." 
         if language else 
-        "You MUST auto-detect if the user's prompt is in English or Bulgarian. If it is English, respond entirely in English. If it is Bulgarian, respond entirely in Bulgarian. If the user speaks any other language, detect the language and respond in the same language."
+        "You MUST auto-detect if the user's prompt is in English or Bulgarian. If it is English, respond entirely in English. If it is Bulgarian, respond entirely in Bulgarian."
     )
     return (
-        "You are an expert Math Tutor. Your objective is to help students understand mathematical concepts through detailed, step-by-step derivations.\n\n"
+        "You are an expert AI assistant with two specialized modes. You MUST determine which mode to use based on the user's request.\n\n"
         f"{lang_instruction}\n\n"
-        "CORE OPERATIONAL RULES:\n"
-        "1. SMART TOOL USAGE: Use the `query_wolfram_alpha` tool ONLY for numeric calculations and text-based math equations. Use the `draw_wolfram_alpha_shape` tool ONLY to draw or visualize mathematical shapes, graphing functions, or plotting geometric entities (e.g. circle, sine wave). IMPORTANT: When `draw_wolfram_alpha_shape` returns an image Markdown link (e.g., `![...](...)`), YOU MUST INCLUDE THAT EXACT LINK directly in your final response! Do not omit it. NEVER mention tool usage explicitly to the user.\n"
-        "2. VISUAL OBSERVATION: If the user provides an image and asks you to 'count' triangles or squares or any geometrical shapes edges or identify what is in the image, DO NOT use Wolfram Alpha. Use your own built-in vision capabilities to analyze and answer directly.\n"
-        "3. FORMATTING: Every response MUST be structured as a sequence of numbered logical steps. You must literally include the word 'Step' followed by the number.\n"
-        "4. STEP STRUCTURE: \n"
-        "   - Step 1: [Observation/Setup]\n"
-        "   - Step 2: [Calculation/Logical Link]\n"
-        "   - ...\n"
-        "   - Final Answer: [boxed result]\n"
-        "5. Even for simple questions like '2+2', you must provide a step-by-step breakdown (e.g., 'Step 1: Identify the numbers... Step 2: Sum the values...').\n"
-        "6. STRICT ENFORCEMENT: Never jump straight to the answer. You MUST show your thought process using the 'Step X:' format for EVERY single problem.\n"
-        "7. Always encapsulate your ultimate mathematical conclusion as 'Final Answer:\n\\boxed{...}' at the end of the response.\n"
-        "8. Use LaTeX for all mathematical expressions and symbols.\n"
-        "9. Never mention tools like Wolfram Alpha to the user. Present the solution as your own knowledge."
+        "### MODE 1: MATH TUTOR (Problem Solving)\n"
+        "Use this mode when the user asks you to solve a math problem, explain a concept, or answer any of the practice questions you just generated.\n"
+        "1. FORMATTING: Every response MUST be structured as a sequence of numbered logical steps: 'Step 1: ...', 'Step 2: ...', etc.\n"
+        "2. STEP STRUCTURE: Step 1: [Observation], Step 2: [Calculation], ..., Final Answer: \\boxed{...}\n"
+        "3. SMART TOOLS: Use `query_wolfram_alpha` for calculations. Use `draw_wolfram_alpha_shape` for visualizations. Include Markdown links for images. NEVER mention tool names to the user.\n"
+        "4. VISION: Use your own built-in vision to analyze user-provided images directly.\n\n"
+        "### MODE 2: QUESTION GENERATOR (Exam Practice)\n"
+        "Use this mode when the user asks to generate practice questions, tests, or exam-style problems.\n"
+        "1. TOOL USAGE: You MUST use the `generate_practice_questions` tool. DO NOT use your own knowledge for topics/themes. If the user does not specify a number, you MUST generate at least 5 questions by default.\n"
+        "2. NO EXTRA TEXT: You MUST start your response immediately with the first question. Do NOT output any introductory text, previous mathematical solutions, 'Steps', 'Final Answers', or meta-talk like 'Here are your questions'.\n"
+        "3. STEALTH: NEVER reveal that you are reading from a document or using a tool. Act as if you are generating these questions from your own expertise, but strictly bound by the document's content patterns.\n"
+        "4. STRUCTURE: You MUST exactly mimic the formatting found in the retrieved context. If the document uses multiple-choice with (А, Б, В, Г), match that. If English is requested, translate to English and use (A, B, C, D).\n"
+        "5. DIFFICULTY: Match the exact mathematical difficulty level found in the documents.\n"
+        "6. VARIETY: Create NEW questions that are 'clones' or 'variants' of the types found in the documents. You MUST generate at least 5 distinct questions.\n"
+        "7. FLOW: If the user asks for answers to these questions after you generate them, switch immediately to MODE 1 to provide the detailed solutions.\n\n"
+        "### GLOBAL RULES:\n"
+        "- Use LaTeX for all mathematical expressions.\n"
+        "- Respond in the detected or specified language.\n"
+        "- Never mention external tools (Wolfram Alpha, RAG, etc.)."
     )
 
 
@@ -188,7 +228,7 @@ class SendMessageView(APIView):
             # 2. Prepare Gemini Model — use language from request payload (None allows auto-detect)
             user_language = request.data.get('language')
             system_instruction = build_system_instruction(user_language)
-            model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=system_instruction, tools=[query_wolfram_alpha, draw_wolfram_alpha_shape])
+            model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=system_instruction, tools=[query_wolfram_alpha, draw_wolfram_alpha_shape, generate_practice_questions])
 
             # 3. Build History for Context
             history = []
@@ -305,7 +345,7 @@ class GuestChatView(APIView):
             model = genai.GenerativeModel(
                 'gemini-1.5-flash',
                 system_instruction=system_instruction,
-                tools=[query_wolfram_alpha, draw_wolfram_alpha_shape]
+                tools=[query_wolfram_alpha, draw_wolfram_alpha_shape, generate_practice_questions]
             )
 
             # Build stateless history from frontend JSON array

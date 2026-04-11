@@ -25,3 +25,18 @@ class ChatMessage(models.Model):
 
     def __str__(self):
         return f"{self.sender}: {self.message[:50]}"
+
+class Document(models.Model):
+    filename = models.CharField(max_length=255, unique=True, help_text="Name of the file in the documents directory")
+    ingested_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.filename
+
+class DocumentChunk(models.Model):
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='chunks')
+    chunk_index = models.IntegerField()
+    text = models.TextField()
+
+    def __str__(self):
+        return f"{self.document.filename} - Chunk {self.chunk_index}"
