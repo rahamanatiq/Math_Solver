@@ -18,8 +18,24 @@ from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
+
+def detect_language_from_text(text: str) -> str:
+    """
+    Auto-detect language from the user's message text.
+    If the text contains Cyrillic characters, assume Bulgarian.
+    Otherwise, default to English.
+    """
+    if text and re.search(r'[\u0400-\u04FF]', text):
+        return 'Bulgarian'
+    return 'English'
+
+
 def query_wolfram_alpha(query: str) -> str:
-    """Use this tool to compute exact mathematical answers, solve equations, or retrieve mathematical facts. Input should be a clearly formulated mathematical query."""
+    """Use this tool ONLY for pure arithmetic like '12150 / 6' or 'sqrt(2025)'. Never pass word problems or sentences."""
+    # Only allow pure math expressions: digits, operators, parentheses, dots, commas, spaces, and math keywords
+    if not re.match(r'^[\d\s\+\-\*/\^\(\)\.\,\=xyzabc]+$', query.strip()) and not re.match(r'^(sqrt|log|sin|cos|tan|abs|solve|simplify|factor|expand)\s*\(', query.strip(), re.IGNORECASE):
+        return "ERROR: Only pure math expressions are allowed (e.g. '12150 / 6', 'sqrt(2025)'). You must solve the word problem yourself step by step and only call this tool for specific calculations."
+
     app_id = getattr(settings, 'WOLFRAM_ALPHA_APP_ID', None)
     if not app_id:
         return "Error: WOLFRAM_ALPHA_APP_ID is not configured."
@@ -40,24 +56,80 @@ def draw_wolfram_alpha_shape(query: str) -> str:
     app_id = getattr(settings, 'WOLFRAM_ALPHA_APP_ID', None)
     if not app_id:
         return "Error: WOLFRAM_ALPHA_APP_ID is not configured."
-    url = "http://api.wolframalpha.com/v1/simple"
+
+    # Use the Full Results API (v2) with JSON output to get structured pods.
+    # This lets us extract ONLY the plot/drawing image instead of a full-page screenshot.
+    url = "http://api.wolframalpha.com/v2/query"
+    # Pod titles that contain actual visualizations/drawings
+    VISUAL_POD_KEYWORDS = [
+        'plot', 'graph', 'illustration', 'visual', 'image',
+        'contour', '3d', 'diagram', 'chart', 'result',
+        'definition',   # geometric shapes often show their drawing here
+    ]
+
     try:
-        response = requests.get(url, params={"appid": app_id, "i": query, "background": "transparent", "format": "png", "width": "500"}, timeout=15)
-        if response.status_code == 200:
-            filename = f"shape_{uuid.uuid4().hex}.png"
-            media_chat_dir = os.path.join(settings.MEDIA_ROOT, 'chat_images')
-            os.makedirs(media_chat_dir, exist_ok=True)
-            filepath = os.path.join(media_chat_dir, filename)
-            with open(filepath, 'wb') as f:
-                f.write(response.content)
-            
-            base_url = getattr(settings, 'BASE_URL', 'http://127.0.0.1:8000').rstrip('/')
-            media_url = getattr(settings, 'MEDIA_URL', '/media/')
-            return f"![Mathematical Visualization]({base_url}{media_url}chat_images/{filename})"
-        elif response.status_code == 501: # Wolfram error
-            return f"Wolfram Alpha could not generate a visual geometric shape for this query: {query}"
-        else:
-            return f"Wolfram Alpha error: {response.text}"
+        response = requests.get(url, params={
+            "appid": app_id,
+            "input": query,
+            "output": "json",
+            "format": "image",     # request image subpods
+            "width": "500",
+            "mag": "2",            # higher resolution
+        }, timeout=15)
+
+        if response.status_code != 200:
+            return f"Wolfram Alpha error (HTTP {response.status_code}): {response.text}"
+
+        data = response.json()
+        query_result = data.get("queryresult", {})
+
+        if not query_result.get("success"):
+            return f"Wolfram Alpha could not understand the query: {query}"
+
+        pods = query_result.get("pods", [])
+        if not pods:
+            return f"Wolfram Alpha returned no results for: {query}"
+
+        # 1. Try to find a pod whose title matches a visual keyword
+        best_img_url = None
+        fallback_img_url = None
+        for pod in pods:
+            title_lower = pod.get("title", "").lower()
+            subpods = pod.get("subpods", [])
+            for subpod in subpods:
+                img_src = subpod.get("img", {}).get("src")
+                if not img_src:
+                    continue
+                # Record first available image as fallback
+                if fallback_img_url is None and title_lower != "input interpretation":
+                    fallback_img_url = img_src
+                # Check if this pod is a visualization pod
+                if any(kw in title_lower for kw in VISUAL_POD_KEYWORDS):
+                    best_img_url = img_src
+                    break  # take the first matching subpod image
+            if best_img_url:
+                break
+
+        chosen_url = best_img_url or fallback_img_url
+        if not chosen_url:
+            return f"Wolfram Alpha did not return a visual image for: {query}"
+
+        # 2. Download the chosen pod image
+        img_response = requests.get(chosen_url, timeout=10)
+        if img_response.status_code != 200:
+            return f"Failed to download the plot image from Wolfram Alpha."
+
+        filename = f"shape_{uuid.uuid4().hex}.png"
+        media_chat_dir = os.path.join(settings.MEDIA_ROOT, 'chat_images')
+        os.makedirs(media_chat_dir, exist_ok=True)
+        filepath = os.path.join(media_chat_dir, filename)
+        with open(filepath, 'wb') as f:
+            f.write(img_response.content)
+
+        base_url = getattr(settings, 'BASE_URL', 'http://127.0.0.1:8000').rstrip('/')
+        media_url = getattr(settings, 'MEDIA_URL', '/media/')
+        return f"![Mathematical Visualization]({base_url}{media_url}chat_images/{filename})"
+
     except requests.exceptions.Timeout:
         return "Error: Wolfram Alpha visual query timed out."
     except Exception as e:
@@ -117,20 +189,22 @@ def build_system_instruction(language=None):
         f"{lang_instruction}\n\n"
         "### MODE 1: MATH TUTOR (Problem Solving)\n"
         "Use this mode when the user asks you to solve a math problem, explain a concept, or answer any of the practice questions you just generated.\n"
-        "1. FORMATTING: Every response MUST be structured as a sequence of numbered logical steps: 'Step 1: ...', 'Step 2: ...', etc.\n"
-        "2. STEP STRUCTURE: Step 1: [Observation], Step 2: [Calculation], ..., Final Answer: \\boxed{...}\n"
-        "3. SMART TOOLS: Use `query_wolfram_alpha` for calculations. Use `draw_wolfram_alpha_shape` for visualizations. Include Markdown links for images. NEVER mention tool names to the user.\n"
+        "1. FORMATTING: Every response MUST be structured as a sequence of numbered logical steps: 'Step 1: ...', 'Step 2: ...', etc. You MUST derive the logical steps yourself. Start your response immediately with Step 1.\n"
+        "2. STEP STRUCTURE: Step 1: [Observation/Setup], Step 2: [Calculation], Step 3: [Result], etc. The last step should naturally state the result as part of the explanation. DO NOT add a separate 'Final Answer:' or '\\boxed{}' block at the end. The answer must appear within the last logical step only.\n"
+        "3. SMART TOOLS: Use `draw_wolfram_alpha_shape` for visualizations. Include Markdown links for images. NEVER mention tool names to the user.\n"
         "4. VISION: Use your own built-in vision to analyze user-provided images directly.\n\n"
         "### MODE 2: QUESTION GENERATOR (Exam Practice)\n"
-        "Use this mode when the user asks to generate practice questions, tests, or exam-style problems.\n"
-        "1. TOOL USAGE: You MUST use the `generate_practice_questions` tool. DO NOT use your own knowledge for topics/themes. If the user does not specify a number, you MUST generate at least 5 questions by default.\n"
+        "Use this mode when the user's message contains knowledge base context and asks to generate practice questions, tests, or exam-style problems.\n"
+        "1. CONTEXT: The knowledge base context will be provided in the user message. Use ONLY the patterns, topics, and difficulty levels from that context to create the questions. If the user does not specify a number, you MUST generate at least 7 questions by default.\n"
         "2. NO EXTRA TEXT: You MUST start your response immediately with the first question. Do NOT output any introductory text, previous mathematical solutions, 'Steps', 'Final Answers', or meta-talk like 'Here are your questions'.\n"
-        "3. STEALTH: NEVER reveal that you are reading from a document or using a tool. Act as if you are generating these questions from your own expertise, but strictly bound by the document's content patterns.\n"
-        "4. STRUCTURE: You MUST exactly mimic the formatting found in the retrieved context. If the document uses multiple-choice with (А, Б, В, Г), match that. If English is requested, translate to English and use (A, B, C, D).\n"
-        "5. DIFFICULTY: Match the exact mathematical difficulty level found in the documents.\n"
-        "6. VARIETY: Create NEW questions that are 'clones' or 'variants' of the types found in the documents. You MUST generate at least 5 distinct questions.\n"
+        "3. STEALTH: NEVER reveal that you are reading from a document or using context. Act as if you are generating these questions from your own expertise.\n"
+        "4. STRUCTURE: You MUST exactly mimic the formatting found in the provided context. If it uses multiple-choice with (A, B, V, G), match that. If English is requested, translate to English and use (A, B, C, D).\n"
+        "5. DIFFICULTY: Match the exact mathematical difficulty level found in the context.\n"
+        "6. VARIETY: Create NEW questions that are 'clones' or 'variants' of the types found in the context. You MUST generate at least 5 distinct questions.\n"
         "7. FLOW: If the user asks for answers to these questions after you generate them, switch immediately to MODE 1 to provide the detailed solutions.\n\n"
         "### GLOBAL RULES:\n"
+        "- You ARE context-aware: you remember the full conversation and can reference earlier questions, answers, or generated problems when the user asks about them (e.g. 'solve question 3', 'what if x=5 instead?', 'explain your previous step').\n"
+        "- CRITICAL — NO RECAPPING: When the user sends a NEW, independent problem, respond ONLY with the solution to THAT problem. NEVER repeat, summarize, or include solutions from earlier messages. Your response must contain ZERO text about prior problems unless the user EXPLICITLY references them.\n"
         "- Use LaTeX for all mathematical expressions.\n"
         "- Respond in the detected or specified language.\n"
         "- Never mention external tools (Wolfram Alpha, RAG, etc.)."
@@ -138,6 +212,76 @@ def build_system_instruction(language=None):
 
 
 from rest_framework.pagination import PageNumberPagination
+
+
+SIMPLE_INTENT_KEYWORDS = [
+    'generate', 'create', 'make', 'quiz', 'test', 'practice', 'give me questions',
+    'задачи', 'въпроси', 'тест', 'генерирай', 'exam', 'mid term', 'midterm',
+    'questions for', 'sample problems', 'mock', 'задачи за'
+]
+
+
+def detect_question_intent(message: str) -> bool:
+    """
+    Returns True if the user wants to generate practice questions.
+    Used to bypass Gemini tool calling and call RAG directly.
+    """
+    if not message:
+        return False
+    lowered = message.lower()
+    for kw in SIMPLE_INTENT_KEYWORDS:
+        if kw in lowered:
+            return True
+    return False
+
+def wrap_message_for_steps(message: str) -> str:
+    """
+    For any substantial math problem (non-trivial query), inject a strict
+    chain-of-thought directive directly into the user message turn.
+    This is more reliable than system instructions alone because
+    Gemini gives higher priority to live user-turn content.
+    """
+    if not message or len(message.strip()) < 30:
+        return message  # Too short to be a complex problem — leave as-is
+
+    lowered = message.lower()
+    for kw in SIMPLE_INTENT_KEYWORDS:
+        if kw in lowered:
+            return message  # It's a question-generation request — don't inject steps
+
+    prefix = (
+        "[INSTRUCTION — follow exactly]\n"
+        "Solve ONLY the problem below. Do NOT repeat, recap, or reference solutions from earlier messages unless I explicitly ask about them.\n\n"
+        "You MUST:\n"
+        "1. Start your response immediately with 'Step 1:'.\n"
+        "2. Work through the logic with numbered steps: 'Step 1:', 'Step 2:', etc.\n"
+        "3. Show ALL intermediate calculations inline within the steps.\n"
+        "4. Do NOT jump to the answer. Do NOT add a 'Final Answer:' block at the end.\n"
+        "5. The answer must appear naturally inside the last step.\n"
+        "6. Your ENTIRE response must be about the problem below — nothing else.\n\n"
+        "[PROBLEM]\n"
+    )
+    return prefix + message
+
+
+def safe_extract_response_text(response) -> str:
+    """
+    Safely extract text from a Gemini response.
+    response.text throws if the response has no text parts (e.g. after
+    automatic function calling returns an empty final turn).
+    This helper inspects the raw candidates/parts to avoid crashing.
+    """
+    try:
+        return response.text
+    except ValueError:
+        # Fallback: manually walk through candidates and parts
+        if response.candidates:
+            for candidate in response.candidates:
+                if candidate.content and candidate.content.parts:
+                    text_parts = [p.text for p in candidate.content.parts if hasattr(p, 'text') and p.text]
+                    if text_parts:
+                        return "\n".join(text_parts)
+        return "I'm sorry, I couldn't generate a response for that. Please try rephrasing your question."
 
 
 class ChatSessionListView(APIView):
@@ -228,12 +372,28 @@ class SendMessageView(APIView):
             # 2. Prepare Gemini Model — use language from request payload (None allows auto-detect)
             user_language = request.data.get('language')
             system_instruction = build_system_instruction(user_language)
-            model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=system_instruction, tools=[query_wolfram_alpha, draw_wolfram_alpha_shape, generate_practice_questions])
+            model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=system_instruction, tools=[draw_wolfram_alpha_shape])
+
+            # 2b. Detect question-generation intent and handle RAG directly
+            is_question_gen = detect_question_intent(user_message_text)
+            if is_question_gen:
+                rag_context = generate_practice_questions(
+                    topic=user_message_text,
+                    request_language=user_language or detect_language_from_text(user_message_text),
+                    num_questions=7
+                )
+                # Inject RAG context directly into the message instead of relying on tool calling
+                user_message_text_for_ai = rag_context + "\n\nOriginal user request: " + user_message_text
+            else:
+                user_message_text_for_ai = None  # Will use wrap_message_for_steps below
 
             # 3. Build History for Context
             history = []
-            previous_messages = ChatMessage.objects.filter(session=session).order_by('created_at')[:20] # Limit context window
-            for msg in previous_messages:
+            # Fetch the latest 20 messages, excluding the current one we just saved
+            previous_messages = ChatMessage.objects.filter(session=session).exclude(id=user_message_obj.id).order_by('-created_at')[:20]
+            
+            # Gemini expects chronological history: [user, model, user, model]
+            for msg in reversed(previous_messages):
                 role = 'user' if msg.sender == 'USER' else 'model'
                 parts = []
                 
@@ -257,7 +417,10 @@ class SendMessageView(APIView):
             inputs = []
             
             if user_message_text:
-                inputs.append(user_message_text)
+                if is_question_gen:
+                    inputs.append(user_message_text_for_ai)
+                else:
+                    inputs.append(wrap_message_for_steps(user_message_text))
             
             if image_file:
                 # Handle Image input
@@ -281,7 +444,7 @@ class SendMessageView(APIView):
             if inputs:
                 try:
                     response = chat.send_message(inputs)
-                    ai_response_text = response.text
+                    ai_response_text = safe_extract_response_text(response)
                 finally:
                     # Clean up: delete the audio file from Gemini's servers.
                     # Gemini File API has a 20GB quota — without this cleanup,
@@ -345,8 +508,20 @@ class GuestChatView(APIView):
             model = genai.GenerativeModel(
                 'gemini-1.5-flash',
                 system_instruction=system_instruction,
-                tools=[query_wolfram_alpha, draw_wolfram_alpha_shape, generate_practice_questions]
+                tools=[draw_wolfram_alpha_shape]
             )
+
+            # Detect question-generation intent and handle RAG directly
+            is_question_gen = detect_question_intent(user_message_text)
+            if is_question_gen:
+                rag_context = generate_practice_questions(
+                    topic=user_message_text,
+                    request_language=language or detect_language_from_text(user_message_text),
+                    num_questions=7
+                )
+                user_message_text_for_ai = rag_context + "\n\nOriginal user request: " + user_message_text
+            else:
+                user_message_text_for_ai = None
 
             # Build stateless history from frontend JSON array
             history = []
@@ -363,7 +538,10 @@ class GuestChatView(APIView):
 
             inputs = []
             if user_message_text:
-                inputs.append(user_message_text)
+                if is_question_gen:
+                    inputs.append(user_message_text_for_ai)
+                else:
+                    inputs.append(wrap_message_for_steps(user_message_text))
             if image_file:
                 img = Image.open(image_file)
                 inputs.append(img)
@@ -385,7 +563,7 @@ class GuestChatView(APIView):
 
             if inputs:
                 response = chat.send_message(inputs)
-                ai_response_text = response.text
+                ai_response_text = safe_extract_response_text(response)
                 
                 wolfram_img_url = None
                 match = re.search(r'(!\[.*?\])\((.*?)\)', ai_response_text)
