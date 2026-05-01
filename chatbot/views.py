@@ -15,8 +15,14 @@ import uuid
 import re
 from django.utils.translation import gettext as _
 from django.contrib.auth import get_user_model
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+import random
 
 User = get_user_model()
+
 
 
 def detect_language_from_text(text: str) -> str:
@@ -53,8 +59,10 @@ def query_wolfram_alpha(query: str) -> str:
 
 def draw_wolfram_alpha_shape(query: str) -> str:
     """Use this tool to draw or visualize mathematical shapes, graphing functions, and plotting geometric figures."""
+    print(f"--- Calling Wolfram Alpha (Visual): {query} ---")
     app_id = getattr(settings, 'WOLFRAM_ALPHA_APP_ID', None)
     if not app_id:
+
         return "Error: WOLFRAM_ALPHA_APP_ID is not configured."
 
     # Use the Full Results API (v2) with JSON output to get structured pods.
@@ -134,6 +142,55 @@ def draw_wolfram_alpha_shape(query: str) -> str:
         return "Error: Wolfram Alpha visual query timed out."
     except Exception as e:
         return f"Error: {str(e)}"
+
+def draw_matplotlib_diagram(python_code: str) -> str:
+    """Use this tool to create complex geometric diagrams and custom mathematical drawings using Python code.
+    python_code: A self-contained Python script using matplotlib and numpy to draw the figure. Do NOT include plt.show()."""
+
+
+    import uuid
+    import os
+
+    filename = f"diagram_{uuid.uuid4().hex}.png"
+    media_chat_dir = os.path.join(settings.MEDIA_ROOT, 'chat_images')
+    os.makedirs(media_chat_dir, exist_ok=True)
+    filepath = os.path.join(media_chat_dir, filename)
+
+    print(f"--- Generating Matplotlib Diagram: {filename} ---")
+    print(f"Code:\n{python_code}")
+
+    # Local namespace for exec
+    local_ns = {
+        'plt': plt,
+        'np': np,
+    }
+
+    try:
+        # Ensure a clean state for the global plt object
+        plt.close('all')
+        plt.figure()
+
+        # Wrap the code to ensure it saves to our specific path and closes the plot
+        # We use r'' for the filepath to handle any path characters safely
+        full_code = python_code
+        full_code += f"\nplt.savefig(r'{filepath}', bbox_inches='tight')\nplt.close()"
+        
+        exec(full_code, {}, local_ns)
+        
+        if os.path.exists(filepath):
+            print(f"Successfully saved diagram to {filepath}")
+            base_url = getattr(settings, 'BASE_URL', 'http://127.0.0.1:8000').rstrip('/')
+            media_url = getattr(settings, 'MEDIA_URL', '/media/')
+            return f"![Geometric Diagram]({base_url}{media_url}chat_images/{filename})"
+        else:
+            print(f"FAILED to save diagram: File not found at {filepath} after savefig")
+            return "Error: Diagram file was not created by the drawing engine."
+            
+    except Exception as e:
+        print(f"Exception during diagram generation: {str(e)}")
+        return f"Error generating diagram: {str(e)}"
+
+
 def generate_practice_questions(topic: str, request_language: str = 'Bulgarian', num_questions: int = 5) -> str:
     """Use this tool whenever the user demonstrates an intent to practice, be tested, receive sample problems, or generate exam-style questions. 
     Triggers on both semantic intent (e.g., 'quiz me', 'give me some task') and explicit keywords (e.g., 'generate questions', 'practice', 'mock test', 'exam-style', 'тест', 'въпроси', 'задачи').
@@ -149,7 +206,10 @@ def generate_practice_questions(topic: str, request_language: str = 'Bulgarian',
     
     if request_language.lower() in ['english', 'en', 'eng']:
         try:
-            translator_model = genai.GenerativeModel('models/gemini-2.5-flash')
+            translator_model = genai.GenerativeModel('models/gemini-2.5-pro')
+
+
+
             translation_prompt = f"Translate the following Bulgarian document text to clear English. Keep math and multiple-choice labels format:\n\n{context}"
             tr_resp = translator_model.generate_content(translation_prompt)
             if tr_resp.text:
@@ -191,14 +251,26 @@ def build_system_instruction(language=None):
         "Use this mode when the user asks you to solve a math problem, explain a concept, or answer any of the practice questions you just generated.\n"
         "1. FORMATTING: Every response MUST be structured as a sequence of numbered logical steps: 'Step 1: ...', 'Step 2: ...', etc. You MUST derive the logical steps yourself. Start your response immediately with Step 1.\n"
         "2. STEP STRUCTURE: Step 1: [Observation/Setup], Step 2: [Calculation], Step 3: [Result], etc. The last step should naturally state the result as part of the explanation. DO NOT add a separate 'Final Answer:' or '\\boxed{}' block at the end. The answer must appear within the last logical step only.\n"
-        "3. SMART TOOLS: Use `draw_wolfram_alpha_shape` for visualizations. Include Markdown links for images. NEVER mention tool names to the user.\n"
+        "3. SMART TOOLS: Choose the correct visualization tool based on STRICT complexity rules:\n"
+        "   - `draw_wolfram_alpha_shape(query)`: MANDATORY for all simple shapes (e.g., 'unit circle', 'equilateral triangle', 'square'), and ALL pure function plots (e.g., 'sine graph', 'plot y=x^2', 'graph sin(x)', 'plot e^x'). If the user has requested a graph or a plot, you MUST call this tool and INCLUDE the returned Markdown image link in your response. NEVER just describe a graph or claim it was generated without actually calling this tool and showing the result.\n"
+        "   - `draw_matplotlib_diagram(python_code)`: Use for complex geometric constructions that require specific labels (A, B, C), midpoints, intersecting lines, or shaded regions. CRITICAL: You MUST ONLY use black color ('k') for ALL lines, points, and labels. NO other colors (blue, red, green, etc.) are allowed. You MUST explicitly draw all lines and connections using solid black lines ('k-'). Ensure mathematical accuracy: for example, medians MUST connect a vertex to the midpoint of the OPPOSITE side. Simply plotting points is not enough; you must connect all vertices and intersection points to visualize the construction.\n"
+
+
+
+
+
+
+        "   - Include Markdown links for images. You MUST include the Markdown link (e.g. `![Geometric Diagram](...)`) at the beginning of your response or in the most relevant Step. NEVER skip or omit the generated link.\n"
+
         "4. VISION: Use your own built-in vision to analyze user-provided images directly.\n\n"
+
         "### MODE 2: QUESTION GENERATOR (Exam Practice)\n"
         "Use this mode when the user's message contains knowledge base context and asks to generate practice questions, tests, or exam-style problems.\n"
         "1. CONTEXT: The knowledge base context will be provided in the user message. Use ONLY the patterns, topics, and difficulty levels from that context to create the questions. If the user does not specify a number, you MUST generate at least 7 questions by default.\n"
         "2. NO EXTRA TEXT: You MUST start your response immediately with the first question. Do NOT output any introductory text, previous mathematical solutions, 'Steps', 'Final Answers', or meta-talk like 'Here are your questions'.\n"
         "3. STEALTH: NEVER reveal that you are reading from a document or using context. Act as if you are generating these questions from your own expertise.\n"
-        "4. STRUCTURE: You MUST exactly mimic the formatting found in the provided context. If it uses multiple-choice with (A, B, V, G), match that. If English is requested, translate to English and use (A, B, C, D).\n"
+        "4. STRUCTURE: You MUST exactly mimic the formatting found in the provided context. HOWEVER, you MUST adapt the option labels to the target language: if responding in Bulgarian, use (А, Б, В, Г); if responding in English, you MUST use (A, B, C, D). NEVER use Bulgarian letters like 'Г', 'Б', or 'В' when the rest of the question is in English.\n"
+
         "5. DIFFICULTY: Match the exact mathematical difficulty level found in the context.\n"
         "6. VARIETY: Create NEW questions that are 'clones' or 'variants' of the types found in the context. You MUST generate at least 5 distinct questions.\n"
         "7. FLOW: If the user asks for answers to these questions after you generate them, switch immediately to MODE 1 to provide the detailed solutions.\n\n"
@@ -207,8 +279,11 @@ def build_system_instruction(language=None):
         "- CRITICAL — NO RECAPPING: When the user sends a NEW, independent problem, respond ONLY with the solution to THAT problem. NEVER repeat, summarize, or include solutions from earlier messages. Your response must contain ZERO text about prior problems unless the user EXPLICITLY references them.\n"
         "- Use LaTeX for all mathematical expressions.\n"
         "- Respond in the detected or specified language.\n"
-        "- Never mention external tools (Wolfram Alpha, RAG, etc.)."
+        "- Never mention external tools (Wolfram Alpha, RAG, etc.).\n"
+        "- SELF-CORRECTION: If you called a tool to generate a diagram or graph, you MUST include the resulting Markdown link in your response. Do not omit it even if your textual explanation is complete."
     )
+
+
 
 
 from rest_framework.pagination import PageNumberPagination
@@ -372,7 +447,11 @@ class SendMessageView(APIView):
             # 2. Prepare Gemini Model — use language from request payload (None allows auto-detect)
             user_language = request.data.get('language')
             system_instruction = build_system_instruction(user_language)
-            model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=system_instruction, tools=[draw_wolfram_alpha_shape])
+            model = genai.GenerativeModel('models/gemini-2.5-pro', system_instruction=system_instruction, tools=[draw_wolfram_alpha_shape, draw_matplotlib_diagram])
+
+
+
+
 
             # 2b. Detect question-generation intent and handle RAG directly
             is_question_gen = detect_question_intent(user_message_text)
@@ -408,7 +487,15 @@ class SendMessageView(APIView):
                          pass
                          
                 if parts:
-                     history.append({'role': role, 'parts': parts})
+                     # Sanitize history to prevent consecutive same-role messages which cause Gemini to hang
+                     if history and history[-1]['role'] == role:
+                         history[-1]['parts'].extend(parts)
+                     else:
+                         history.append({'role': role, 'parts': parts})
+
+            # Gemini expects the last message in history to be from the model before we send_message() as user
+            if history and history[-1]['role'] == 'user':
+                history.pop()
 
             chat = model.start_chat(history=history, enable_automatic_function_calling=True)
 
@@ -506,10 +593,12 @@ class GuestChatView(APIView):
         try:
             system_instruction = build_system_instruction(language)
             model = genai.GenerativeModel(
-                'gemini-1.5-flash',
+                'models/gemini-2.5-pro',
                 system_instruction=system_instruction,
-                tools=[draw_wolfram_alpha_shape]
+                tools=[draw_wolfram_alpha_shape, draw_matplotlib_diagram]
             )
+
+
 
             # Detect question-generation intent and handle RAG directly
             is_question_gen = detect_question_intent(user_message_text)
